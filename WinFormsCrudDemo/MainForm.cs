@@ -1,6 +1,8 @@
 ﻿using System;
 using System.Data;
 using System.Globalization;
+using System.IO;
+using System.Text;
 using System.Windows.Forms;
 using WinFormsCrudDemo.Data;
 
@@ -230,5 +232,105 @@ namespace WinFormsCrudDemo
             btnGuardar.Enabled = nameOk && salaryOk;
         }
 
+        private void btnExportar_Click(object sender, EventArgs e)
+        {
+            try
+            {
+                if (dgv.Rows.Count == 0)
+                {
+                    MessageBox.Show("No hay datos para exportar.", "Exportar CSV",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    return;
+                }
+
+                using (var sfd = new SaveFileDialog()
+                {
+                    Filter = "CSV (*.csv)|*.csv",
+                    FileName = "Empleados.csv",
+                    RestoreDirectory = true
+                })
+                {
+                    if (sfd.ShowDialog() != DialogResult.OK) return;
+
+                    ExportDataGridViewToCsv(dgv, sfd.FileName);
+
+                    var abrir = MessageBox.Show("Exportado correctamente.\n\n¿Quieres abrir el archivo?",
+                        "Exportar CSV", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+                    if (abrir == DialogResult.Yes)
+                    {
+                        try
+                        {
+                            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo()
+                            { FileName = sfd.FileName, UseShellExecute = true });
+                        }
+                        catch { }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("Error al exportar: " + ex.Message, "Exportar CSV",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void ExportDataGridViewToCsv(DataGridView grid, string filePath)
+        {
+            var es = new CultureInfo("es-ES");
+            var sb = new StringBuilder();
+
+            // pista para Excel
+            sb.AppendLine("sep=;");
+            char sep = ';';
+
+            // cabeceras
+            bool first;
+            first = true;
+            foreach (DataGridViewColumn col in grid.Columns)
+            {
+                if (!col.Visible) continue;
+                if (!first) sb.Append(sep);
+                sb.Append(E(col.HeaderText ?? ""));
+                first = false;
+            }
+            sb.AppendLine();
+
+            // filas visibles
+            foreach (DataGridViewRow row in grid.Rows)
+            {
+                if (row.IsNewRow || !row.Visible) continue;
+
+                first = true;
+                foreach (DataGridViewColumn col in grid.Columns)
+                {
+                    if (!col.Visible) continue;
+
+                    var val = row.Cells[col.Index].Value;
+                    string text;
+
+                    if (val is DateTime dt)
+                        text = dt.ToString("dd/MM/yyyy", es);           // <- fecha corta
+                    else if (val is IFormattable && !(val is string))
+                        text = ((IFormattable)val).ToString(null, es);  // <- números con coma
+                    else
+                        text = (val?.ToString() ?? "");
+
+                    text = text.Replace("\r\n", " ").Replace("\n", " ");
+
+                    if (!first) sb.Append(sep);
+                    sb.Append(E(text));
+                    first = false;
+                }
+                sb.AppendLine();
+            }
+
+            // ANSI (Windows-1252) para que Excel ES no “rompa” acentos
+            var ansi = Encoding.GetEncoding(1252);
+            File.WriteAllText(filePath, sb.ToString(), ansi);
+        }
+
+        // Reemplaza la función local estática por un método privado
+        private string E(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
     }
 }

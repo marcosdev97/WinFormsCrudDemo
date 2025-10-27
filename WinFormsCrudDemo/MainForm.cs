@@ -5,6 +5,7 @@ using System.IO;
 using System.Text;
 using System.Windows.Forms;
 using WinFormsCrudDemo.Data;
+using WinFormsCrudDemo.Utils;
 
 namespace WinFormsCrudDemo
 {
@@ -34,19 +35,41 @@ namespace WinFormsCrudDemo
             {
                 var dt = Db.GetAll();
                 dgv.DataSource = dt;
-                dgv.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
-                // formatea columnas si quieres...
 
+                dgv.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+                dgv.ReadOnly = true;
+                dgv.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+                dgv.MultiSelect = false;
+
+                if (dgv.Columns.Contains("IdEmpleado"))
+                {
+                    dgv.Columns["IdEmpleado"].HeaderText = "ID";
+                }
+                if (dgv.Columns.Contains("Salario"))
+                {
+                    dgv.Columns["Salario"].HeaderText = "Salario (€)";
+                    dgv.Columns["Salario"].DefaultCellStyle.Format = "N2";
+                }
+                if (dgv.Columns.Contains("FechaAlta"))
+                {
+                    dgv.Columns["FechaAlta"].HeaderText = "Fecha alta";
+                    dgv.Columns["FechaAlta"].DefaultCellStyle.Format = "dd/MM/yyyy";
+                }
+
+                dgv.ClearSelection();
                 if (selectId.HasValue)
                     SeleccionarFilaPorId(selectId.Value);
-                else
-                    dgv.ClearSelection();
+            }
+            catch (Exception ex)
+            {
+                ShowError("Cargar datos", ex, "UI.CargarTabla");
             }
             finally
             {
                 _changingSelection = false;
             }
         }
+
 
 
         private void Buscar()
@@ -75,9 +98,19 @@ namespace WinFormsCrudDemo
 
         private void btnRefrescar_Click(object sender, EventArgs e)
         {
-            _isNewMode = false;
-            CargarTabla();
+            try
+            {
+                _isNewMode = false;
+                CargarTabla(_selectedId);  // intenta mantener selección si existe
+                MessageBox.Show("Datos actualizados.", "Refrescar",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                ShowError("Refrescar", ex, "UI.btnRefrescar_Click");
+            }
         }
+
 
 
         private void btnNuevo_Click(object sender, EventArgs e)
@@ -97,53 +130,95 @@ namespace WinFormsCrudDemo
 
         private void btnGuardar_Click(object sender, EventArgs e)
         {
-            // 1) Validación UI
-            if (!ValidateForm())
+            try
             {
-                MessageBox.Show("Revisa los campos marcados en rojo.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
+                // Validación rápida de UI
+                if (!ValidateForm())
+                {
+                    ShowWarn("Validación", "Revisa los campos marcados en rojo.");
+                    return;
+                }
+
+                // Preparar salario
+                decimal? salario = null;
+                if (!string.IsNullOrWhiteSpace(txtSalario.Text) &&
+                    TryParseDecimal(txtSalario.Text, out var s))
+                    salario = s;
+
+                // INSERT o UPDATE
+                if (_selectedId == null) // modo nuevo
+                {
+                    var newId = Db.Insert(
+                        txtNombre.Text.Trim(),
+                        txtPuesto.Text.Trim(),
+                        salario,
+                        dtpFechaAlta.Value.Date);
+
+                    _isNewMode = false;
+                    CargarTabla(newId);              // recarga y selecciona insertado
+                    MessageBox.Show("Registro insertado.", "Guardar",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else // update
+                {
+                    Db.Update(
+                        _selectedId.Value,
+                        txtNombre.Text.Trim(),
+                        txtPuesto.Text.Trim(),
+                        salario,
+                        dtpFechaAlta.Value.Date);
+
+                    _isNewMode = false;
+                    CargarTabla(_selectedId.Value);  // mantén selección
+                    MessageBox.Show("Registro actualizado.", "Guardar",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+
+                UpdateSaveEnabled();
             }
-
-            // 2) Preparar salario
-            decimal? salario = null;
-            if (!string.IsNullOrWhiteSpace(txtSalario.Text) && TryParseDecimal(txtSalario.Text, out var s))
-                salario = s;
-
-            // 3) INSERT o UPDATE 
-            if (_selectedId == null)
+            catch (Exception ex)
             {
-                var newId = Db.Insert(txtNombre.Text.Trim(), txtPuesto.Text.Trim(), salario, dtpFechaAlta.Value.Date);
-                _isNewMode = false;
-                CargarTabla(newId);
-                SeleccionarFilaPorId(newId);
-                MessageBox.Show("Registro insertado.");
+                ShowError("Guardar", ex, "UI.btnGuardar_Click");
             }
-            else
-            {
-                Db.Update(_selectedId.Value, txtNombre.Text.Trim(), txtPuesto.Text.Trim(), salario, dtpFechaAlta.Value.Date);
-                _isNewMode = false;
-                CargarTabla(_selectedId);
-                SeleccionarFilaPorId(_selectedId.Value);
-                MessageBox.Show("Registro actualizado.");
-            }
-
-            UpdateSaveEnabled();
         }
+
 
 
         private void btnEliminar_Click(object sender, EventArgs e)
         {
-            if (_selectedId == null) return;
-            if (MessageBox.Show("¿Eliminar el registro seleccionado?", "Confirmar borrado",
-                MessageBoxButtons.YesNo) == DialogResult.Yes)
+            try
             {
+                if (_selectedId == null)
+                {
+                    ShowWarn("Eliminar", "No hay ningún registro seleccionado.");
+                    return;
+                }
+
+                var confirm = MessageBox.Show(
+                    "¿Eliminar el registro seleccionado?",
+                    "Confirmar borrado",
+                    MessageBoxButtons.YesNo,
+                    MessageBoxIcon.Question);
+
+                if (confirm != DialogResult.Yes) return;
+
                 Db.Delete(_selectedId.Value);
-                btnNuevo_Click(sender, e);
-                _isNewMode = false;
+
+                
                 _selectedId = null;
-                CargarTabla();
+                CargarTabla();           // recarga estado
+                btnNuevo_Click(sender, e); // limpia campos
+                _isNewMode = false;
+
+                MessageBox.Show("Registro eliminado.", "Eliminar",
+                    MessageBoxButtons.OK, MessageBoxIcon.Information);
+            }
+            catch (Exception ex)
+            {
+                ShowError("Eliminar", ex, "UI.btnEliminar_Click");
             }
         }
+
         private void SeleccionarFilaPorId(int id)
         {
             _changingSelection = true;
@@ -332,5 +407,18 @@ namespace WinFormsCrudDemo
 
         // Reemplaza la función local estática por un método privado
         private string E(string s) => "\"" + s.Replace("\"", "\"\"") + "\"";
+
+        private void ShowWarn(string title, string message)
+        {
+            MessageBox.Show(message, title, MessageBoxButtons.OK, MessageBoxIcon.Warning);
+        }
+
+        private void ShowError(string title, Exception ex, string? extra = null)
+        {
+            Logger.Log(ex, extra ?? title);
+            MessageBox.Show(
+                $"Ha ocurrido un error.\n\nDetalles guardados en:\n{Logger.GetLogPath()}",
+                title, MessageBoxButtons.OK, MessageBoxIcon.Error);
+        }
     }
 }

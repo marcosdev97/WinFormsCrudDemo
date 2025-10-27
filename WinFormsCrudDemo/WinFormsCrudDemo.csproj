@@ -84,6 +84,7 @@
   <ItemGroup />
   <ItemGroup>
     <Content Include="sql\02_procs.sql" />
+    <Content Include="sql\03_constraints_indexes.sql" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
 </Project>

@@ -10,21 +10,42 @@ namespace WinFormsCrudDemo
     {
         private int? _selectedId = null;
         private bool _isNewMode = false;
-
+        private bool _changingSelection = false;
 
         public MainForm()
         {
             InitializeComponent();
+            btnGuardar.Enabled = false;
+
+            txtNombre.TextChanged += (_, __) => UpdateSaveEnabled();
+            txtSalario.TextChanged += (_, __) => UpdateSaveEnabled();
+            dtpFechaAlta.ValueChanged += (_, __) => UpdateSaveEnabled();
             CargarTabla();
             dgv.SelectionChanged += Dgv_SelectionChanged;
             txtBuscar.TextChanged += (_, __) => Buscar();
         }
 
-        private void CargarTabla()
+        private void CargarTabla(int? selectId = null)
         {
-            dgv.DataSource = Db.GetAll();
-            dgv.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            _changingSelection = true;
+            try
+            {
+                var dt = Db.GetAll();
+                dgv.DataSource = dt;
+                dgv.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+                // formatea columnas si quieres...
+
+                if (selectId.HasValue)
+                    SeleccionarFilaPorId(selectId.Value);
+                else
+                    dgv.ClearSelection();
+            }
+            finally
+            {
+                _changingSelection = false;
+            }
         }
+
 
         private void Buscar()
         {
@@ -36,8 +57,9 @@ namespace WinFormsCrudDemo
 
         private void Dgv_SelectionChanged(object sender, EventArgs e)
         {
-            if (_isNewMode) return;
+            if (_isNewMode || _changingSelection) return;
             if (dgv.CurrentRow == null) return;
+
             var row = (dgv.CurrentRow.DataBoundItem as DataRowView)?.Row;
             if (row == null) return;
 
@@ -65,69 +87,147 @@ namespace WinFormsCrudDemo
             txtSalario.Clear();
             dtpFechaAlta.Value = DateTime.Today;
 
-            try { dgv.ClearSelection(); } catch { /* no pasa nada */ }
+            try { dgv.ClearSelection(); } catch { }
+
+            UpdateSaveEnabled();
             txtNombre.Focus();
         }
 
         private void btnGuardar_Click(object sender, EventArgs e)
         {
-            if (string.IsNullOrWhiteSpace(txtNombre.Text))
+            // 1) Validación UI
+            if (!ValidateForm())
             {
-                MessageBox.Show("Nombre es obligatorio."); return;
+                MessageBox.Show("Revisa los campos marcados en rojo.", "Validación", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
             }
 
+            // 2) Preparar salario
             decimal? salario = null;
-            if (decimal.TryParse(txtSalario.Text.Replace(",", "."),
-                NumberStyles.Any, CultureInfo.InvariantCulture, out var s))
+            if (!string.IsNullOrWhiteSpace(txtSalario.Text) && TryParseDecimal(txtSalario.Text, out var s))
                 salario = s;
 
+            // 3) INSERT o UPDATE 
             if (_selectedId == null)
             {
                 var newId = Db.Insert(txtNombre.Text.Trim(), txtPuesto.Text.Trim(), salario, dtpFechaAlta.Value.Date);
                 _isNewMode = false;
-                CargarTabla();
-                SeleccionarFilaPorId(newId); // <-- nuevo
+                CargarTabla(newId);
+                SeleccionarFilaPorId(newId);
                 MessageBox.Show("Registro insertado.");
             }
             else
             {
                 Db.Update(_selectedId.Value, txtNombre.Text.Trim(), txtPuesto.Text.Trim(), salario, dtpFechaAlta.Value.Date);
                 _isNewMode = false;
-                CargarTabla();
+                CargarTabla(_selectedId);
                 SeleccionarFilaPorId(_selectedId.Value);
                 MessageBox.Show("Registro actualizado.");
             }
 
-            CargarTabla();
+            UpdateSaveEnabled();
         }
+
 
         private void btnEliminar_Click(object sender, EventArgs e)
         {
             if (_selectedId == null) return;
-            if (MessageBox.Show("¿Eliminar registro seleccionado?", "Confirmar",
+            if (MessageBox.Show("¿Eliminar el registro seleccionado?", "Confirmar borrado",
                 MessageBoxButtons.YesNo) == DialogResult.Yes)
             {
                 Db.Delete(_selectedId.Value);
                 btnNuevo_Click(sender, e);
                 _isNewMode = false;
+                _selectedId = null;
                 CargarTabla();
             }
         }
         private void SeleccionarFilaPorId(int id)
         {
-            if (dgv.DataSource is DataTable dt)
+            _changingSelection = true;
+            try
             {
+                dgv.ClearSelection();
                 foreach (DataGridViewRow row in dgv.Rows)
                 {
-                    if (row.DataBoundItem is DataRowView drv && Convert.ToInt32(drv.Row["IdEmpleado"]) == id)
+                    var drv = row.DataBoundItem as DataRowView;
+                    if (drv == null) continue;
+
+                    if (Convert.ToInt32(drv.Row["IdEmpleado"]) == id)
                     {
+                        // Selección real
                         row.Selected = true;
-                        dgv.CurrentCell = row.Cells[0];
-                        dgv.FirstDisplayedScrollingRowIndex = row.Index;
+                        dgv.CurrentCell = row.Cells[0]; 
+                        if (row.Index >= 0) dgv.FirstDisplayedScrollingRowIndex = row.Index;
+
+                        _selectedId = id;
+                        txtNombre.Text = drv.Row["Nombre"].ToString();
+                        txtPuesto.Text = drv.Row["Puesto"]?.ToString();
+                        txtSalario.Text = drv.Row["Salario"] == DBNull.Value ? "" :
+                            Convert.ToDecimal(drv.Row["Salario"]).ToString(CultureInfo.InvariantCulture);
+                        dtpFechaAlta.Value = Convert.ToDateTime(drv.Row["FechaAlta"]);
                         break;
                     }
                 }
             }
+            finally
+            {
+                _changingSelection = false; 
+            }
+        }
+
+        private bool TryParseDecimal(string text, out decimal value)
+        {
+            // Acepta coma o punto como separador
+            var normalized = (text ?? "").Trim().Replace(",", ".");
+            return decimal.TryParse(normalized, NumberStyles.Any, CultureInfo.InvariantCulture, out value);
+        }
+
+        private bool ValidateForm()
+        {
+            bool ok = true;
+            errorProvider1.Clear();
+
+            // Nombre obligatorio
+            if (string.IsNullOrWhiteSpace(txtNombre.Text))
+            {
+                errorProvider1.SetError(txtNombre, "El nombre es obligatorio.");
+                ok = false;
+            }
+
+            // Salario: vacío = permitido; si trae algo, debe ser numérico >= 0
+            if (!string.IsNullOrWhiteSpace(txtSalario.Text))
+            {
+                if (!TryParseDecimal(txtSalario.Text, out var s))
+                {
+                    errorProvider1.SetError(txtSalario, "Debe ser un número (usa 1234.56 o 1234,56).");
+                    ok = false;
+                }
+                else if (s < 0)
+                {
+                    errorProvider1.SetError(txtSalario, "No puede ser negativo.");
+                    ok = false;
+                }
+            }
+
+            // Fecha coherente: no en el futuro lejano
+            if (dtpFechaAlta.Value.Date > DateTime.Today.AddDays(1))
+            {
+                errorProvider1.SetError(dtpFechaAlta, "Fecha no puede ser futura.");
+                ok = false;
+            }
+
+            return ok;
+        }
+
+        private void UpdateSaveEnabled()
+        {
+            // Activa Guardar si al menos pasa validaciones mínimas (nombre + salario numérico si lo hay)
+            errorProvider1.Clear();
+            bool nameOk = !string.IsNullOrWhiteSpace(txtNombre.Text);
+            bool salaryOk = string.IsNullOrWhiteSpace(txtSalario.Text) || TryParseDecimal(txtSalario.Text, out _);
+
+            btnGuardar.Enabled = nameOk && salaryOk;
         }
 
     }
